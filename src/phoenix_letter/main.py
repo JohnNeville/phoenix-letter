@@ -37,6 +37,14 @@ def parse_arguments(args):
                         help="Max number of empty receives before giving up",
                         metavar="EMPTY_RECEIVE")
 
+    parser.add_argument("--max-messages", dest="max_messages", default=-1,
+                        help="Max number of messages to receive before stopping",
+                        metavar="MAX_MESSAGES")
+
+    parser.add_argument("--messages-per-loop", dest="messages_per_loop", default=10,
+                        help="Number of messages per loop",
+                        metavar="MESSAGES_PER_LOOP")
+
     return parser.parse_args(args)
 
 
@@ -56,12 +64,19 @@ def main(args=None):
     destination_queue_url = destination_queue['QueueUrl']
 
     number_of_empty_receives = 0
+    number_receives = 0
 
-    while number_of_empty_receives <= int(args.max_empty_receives_count):
+    # Prevent loading more messages than the max
+    if(args.max_messages != -1 and args.max_messages < args.messages_per_loop):
+        args.messages_per_loop = args.max_messages
+
+    print("Getting the first {} messages".format(args.max_messages))
+    
+    while number_of_empty_receives <= int(args.max_empty_receives_count) and (number_receives < int(args.max_messages) or int(args.max_messages) == -1):
         print("Receiving message...")
         received_response = sqs_client.receive_message(QueueUrl=source_queue_url, MessageAttributeNames=["All"],
-                                                       AttributeNames=['All'],
-                                                       MaxNumberOfMessages=10)
+                                                        AttributeNames=['All'],
+                                                        MaxNumberOfMessages=int(args.messages_per_loop))
 
         if ("Messages" not in received_response) or (len(received_response['Messages']) == 0):
             print("Queue did not returned messages")
@@ -73,22 +88,20 @@ def main(args=None):
             sleep(sleep_time)
 
             continue
-
         print("Received {} messages".format(len(received_response['Messages'])))
 
         for message in received_response['Messages']:
-            print("Sending message to '{}'".format(args.destination))
+            if(number_receives <= int(args.max_messages) or int(args.max_messages) == -1):
+                number_receives += 1
+                print("Sending message to '{}'".format(args.destination))
 
-            send_response = sqs_client.send_message(QueueUrl=destination_queue_url,
-                                                    MessageBody=message['Body'],
-                                                    MessageAttributes=message['MessageAttributes'])
+                send_response = sqs_client.send_message(QueueUrl=destination_queue_url,
+                                                        MessageBody=message['Body'],
+                                                        MessageAttributes=message['MessageAttributes'])
 
-            print("Deleting message from '{}'".format(args.source))
-            sqs_client.delete_message(QueueUrl=source_queue_url,
-                                      ReceiptHandle=message['ReceiptHandle'])
-
+                print("Deleting message from '{}'".format(args.source))
+                sqs_client.delete_message(QueueUrl=source_queue_url,ReceiptHandle=message['ReceiptHandle'])
     print("Giving up after {} empty receives from the source queue.".format(number_of_empty_receives))
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
